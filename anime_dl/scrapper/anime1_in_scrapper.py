@@ -1,14 +1,11 @@
-import json
-import logging
 import regex as re
-import requests
 import typing
 
 from anime_dl.const import regex, general
 from anime_dl.object.episode import Episode
 from anime_dl.scrapper.scrapper import Scrapper
+from anime_dl.utils import http_client
 from anime_dl.utils.logger import Logger
-from anime_dl.utils.progress_bar import ProgressBar
 from bs4 import BeautifulSoup
 
 logger = Logger()
@@ -41,7 +38,7 @@ class Anime1InScrapper(Scrapper):
     def is_series(self, url: str) -> bool:
         try:
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
             return doc.select_one("h1.page-title") is not None
         except Exception as e:
             logger.error(f"{url}: {e}")
@@ -51,7 +48,7 @@ class Anime1InScrapper(Scrapper):
         try:
             episodes = []
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
             series_name = doc.select_one("h1.page-title").text.strip()
             articles = doc.select("article")
             episode_no = 1
@@ -75,42 +72,45 @@ class Anime1InScrapper(Scrapper):
         try:
             episodes = []
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
             series_name = doc.select_one("h1.page-title").text.strip()
             articles = doc.select("article")
             episode_no = 1
-            progress_bar = ProgressBar("Link Fetching", 1, len(articles))
             for article in reversed(articles):
                 episode_name = article.select_one("h2.entry-title").text.strip()
                 referer_url = (
                     article.select_one("h2.entry-title a").attrs["href"].strip()
                 )
-                iframe_src = (
-                    "https://anime1.in"
-                    + article.select_one("iframe.vframe").attrs["src"].strip()
-                )
-                video_url = self.parse_iframe(iframe_src)
                 episodes.append(
                     Episode()
                     .set_series_name(series_name)
                     .set_season("na")
                     .set_episode_name(episode_name)
                     .set_episode_no(episode_no)
-                    .set_video_url(video_url)
                     .set_referer_url(referer_url)
                     .set_image_src("na")
                 )
                 episode_no = episode_no + 1
-                progress_bar.print()
             return episodes
         except Exception as e:
             logger.error(f"{url}: {e}")
             return []
 
+    def resolve_episode(self, episode: Episode) -> Episode:
+        if episode.video_url or not episode.referer_url:
+            return episode
+
+        resolved, _ = self.parse_episode(episode.referer_url)
+        return (
+            episode.set_episode_name(episode.episode_name or resolved.episode_name)
+            .set_video_url(resolved.video_url)
+            .set_referer_url(resolved.referer_url or episode.referer_url)
+        )
+
     def parse_episode(self, url: str) -> tuple[Episode, str]:
         try:
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
             series_url = (
                 "https://anime1.in/"
                 + doc.select_one("p > a[href^='/']").attrs["href"].strip()
@@ -134,7 +134,7 @@ class Anime1InScrapper(Scrapper):
     def parse_iframe(self, url: str) -> str:
         try:
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
             return doc.select_one("video source").attrs["src"].strip()
         except Exception as e:
             logger.error(f"{url}: {e}")

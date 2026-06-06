@@ -1,4 +1,3 @@
-from pydantic import ValidationError
 from anime_dl.object.episode import Episode
 from anime_dl.validator.abstract_validator import AbstractValidator
 
@@ -8,5 +7,4 @@ class SeasonValidator(AbstractValidator):
         season = episode.season
         if season is None:
             raise Exception(f"invalid season: {season}")
-        else:
-            return super().validate(episode)
+        return super().validate(episode)

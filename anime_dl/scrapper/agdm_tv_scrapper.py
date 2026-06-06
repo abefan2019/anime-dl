@@ -1,16 +1,13 @@
 import json
-import logging
 import re
-import requests
 import typing
 
 from anime_dl.const import regex, general
 from anime_dl.object.episode import Episode
 from anime_dl.scrapper.scrapper import Scrapper
+from anime_dl.utils import http_client
 from anime_dl.utils.logger import Logger
-from anime_dl.utils.progress_bar import ProgressBar
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
 
 logger = Logger()
 
@@ -18,48 +15,10 @@ logger = Logger()
 class AgdmTvScrapper(Scrapper):
     def get_episodes(self, url: str) -> typing.List[Episode]:
         if re.search(regex.URL["agdm.tv"]["series"], url):
-            episodes = self.parse_series(url)
-            progress_bar = ProgressBar("Link Fetching", 1, len(episodes))
-            for episode in episodes:
-                e, x_servers = self.parse_episode(episode.referer_url)
-                # check if video source available
-                if self.test_connectivity(e.video_url):
-                    episode = (
-                        episode.set_series_name(e.series_name)
-                        .set_season(e.season)
-                        .set_episode_name(e.episode_name)
-                        .set_episode_no(e.episode_no)
-                        .set_video_url(e.video_url)
-                    )
-                # try other servers
-                else:
-                    logger.warning(f"video source fail: {episode.referer_url} ({e.video_url})")
-                    m = re.search(regex.URL["agdm.tv"]["episode"], episode.referer_url)
-                    id = int(m.groups()[0])
-                    server = int(m.groups()[1])
-                    episode_no = m.groups()[2]
-                    for x_server in x_servers:
-                        x_url = (
-                            f"https://agdm.tv/play/{id}-{x_server}-{episode_no}.html"
-                        )
-                        logger.info(f"try another server: {x_url}")
-                        e, _ = self.parse_episode(x_url)
-                        if self.test_connectivity(e.video_url):
-                            episode = (
-                                episode.set_series_name(e.series_name)
-                                .set_season(e.season)
-                                .set_episode_name(e.episode_name)
-                                .set_episode_no(e.episode_no)
-                                .set_video_url(e.video_url)
-                            )
-                        else:
-                            logger.warning(f"video source fail: {x_url} ({e.video_url})")
-                progress_bar.print()
-            return episodes
+            return self.parse_series(url)
         elif re.search(regex.URL["agdm.tv"]["episode"], url):
             m = re.search(regex.URL["agdm.tv"]["episode"], url)
             id = int(m.groups()[0])
-            server = int(m.groups()[1])
             episode_no = m.groups()[2]
             episode, x_servers = self.parse_episode(url)
             # check if video source available
@@ -84,7 +43,13 @@ class AgdmTvScrapper(Scrapper):
         try:
             episodes = []
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
+            series_name_node = doc.select_one(".myui-info__title")
+            series_name = (
+                series_name_node.text.strip()
+                if series_name_node is not None
+                else "na"
+            )
             image_src = (
                 doc.select_one("a.myui-vodlist__thumb img.lazyload")
                 .attrs["src"]
@@ -93,24 +58,63 @@ class AgdmTvScrapper(Scrapper):
             # select_one for 1st playlist
             content_list = doc.select_one("ul.myui-content__list")
             items = content_list.select("li a")
+            episode_no = 1
             for item in items:
                 referer_url = "https://agdm.tv" + item.attrs["href"].strip()
                 episodes.append(
-                    Episode().set_referer_url(referer_url).set_image_src(image_src)
+                    Episode()
+                    .set_series_name(series_name)
+                    .set_season("na")
+                    .set_episode_name(item.text.strip())
+                    .set_episode_no(episode_no)
+                    .set_referer_url(referer_url)
+                    .set_image_src(image_src)
                 )
+                episode_no = episode_no + 1
             return episodes
         except Exception as e:
             logger.error(f"{url}: {e}")
             return []
 
+    def resolve_episode(self, episode: Episode) -> Episode:
+        if episode.video_url or not episode.referer_url:
+            return episode
+
+        resolved, x_servers = self.parse_episode(episode.referer_url)
+        if self.test_connectivity(resolved.video_url):
+            return self._merge_episode(episode, resolved)
+
+        logger.warning(f"video source fail: {episode.referer_url} ({resolved.video_url})")
+        m = re.search(regex.URL["agdm.tv"]["episode"], episode.referer_url)
+        id = int(m.groups()[0])
+        episode_no = m.groups()[2]
+        for x_server in x_servers:
+            x_url = f"https://agdm.tv/play/{id}-{x_server}-{episode_no}.html"
+            logger.info(f"try another server: {x_url}")
+            resolved, _ = self.parse_episode(x_url)
+            if self.test_connectivity(resolved.video_url):
+                return self._merge_episode(episode, resolved)
+            logger.warning(f"video source fail: {x_url} ({resolved.video_url})")
+        return episode
+
+    def _merge_episode(self, episode: Episode, resolved: Episode) -> Episode:
+        return (
+            episode.set_series_name(resolved.series_name or episode.series_name)
+            .set_season(resolved.season or episode.season)
+            .set_episode_name(resolved.episode_name or episode.episode_name)
+            .set_episode_no(resolved.episode_no or episode.episode_no)
+            .set_video_url(resolved.video_url)
+            .set_referer_url(resolved.referer_url or episode.referer_url)
+            .set_image_src(resolved.image_src or episode.image_src)
+        )
+
     def parse_episode(self, url: str) -> tuple[Episode, typing.List[int]]:
         try:
             m = re.search(regex.URL["agdm.tv"]["episode"], url)
-            id = int(m.groups()[0])
             server = int(m.groups()[1])
             episode_no = m.groups()[2]
             headers = general.REQUEST["header"]
-            doc = BeautifulSoup(requests.get(url, headers=headers).text, "html.parser")
+            doc = BeautifulSoup(http_client.get(url, headers=headers).text, "html.parser")
             html = str(doc)
             player_aaaa = json.loads(
                 html.split("var player_aaaa=")[1]
@@ -148,6 +152,6 @@ class AgdmTvScrapper(Scrapper):
             logger.error(f"{url}: {e}")
             return Episode()
 
-    def test_connectivity(url):
+    def test_connectivity(self, url):
         headers = general.REQUEST["header"]
-        return requests.get(url, headers=headers).ok
+        return http_client.get(url, headers=headers).ok

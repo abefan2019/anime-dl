@@ -1,4 +1,5 @@
 import logging
+import sys
 from logging.config import dictConfig
 
 from anime_dl.utils.config_loader import ConfigLoader
@@ -7,14 +8,20 @@ config_loader = ConfigLoader()
 logging_level = int(config_loader.get(section="LOGGING", key="level"))
 webui_log = config_loader.get(section="WEBUI", key="log")
 
-# logging.basicConfig(
-#     level=logging_level,
-#     format="[%(asctime)s] %(name)s [%(levelname)-8s]: %(message)s",
-#     handlers=[
-#         logging.FileHandler(filename=webui_log),
-#         logging.StreamHandler(),
-#     ],
-# )
+
+def make_console_streams_safe() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (OSError, ValueError):
+            pass
+
+
+make_console_streams_safe()
+
 logging_config = {
     "version": 1,
     "handlers": {
@@ -26,6 +33,8 @@ logging_config = {
         "file_handler": {
             "class": "logging.FileHandler",
             "filename": webui_log,
+            "encoding": "utf-8",
+            "errors": "backslashreplace",
             "level": logging_level,
             "formatter": "file_formatter",
         },
@@ -72,11 +81,9 @@ class Logger(metaclass=LoggerMeta):
             self.logger.error(message)
 
     def reset_webui_log(self) -> None:
-        with open(webui_log, "w") as file:
+        with open(webui_log, "w", encoding="utf-8") as file:
             file.truncate(0)
 
     def read_webui_log(self) -> str:
-        content = ""
-        with open(webui_log, "r") as f:
-            content = f.readlines()
-        return "".join(content[-15:])
+        with open(webui_log, "r", encoding="utf-8", errors="replace") as f:
+            return "".join(f.readlines()[-15:])
