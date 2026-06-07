@@ -1,18 +1,15 @@
 import re
 import typing
-import os
 
 from anime_dl.const import regex, general
 from anime_dl.object.episode import Episode
 from anime_dl.scrapper.scrapper import Scrapper
-from anime_dl.utils.config_loader import ConfigLoader
 from anime_dl.utils import http_client
 from anime_dl.utils.logger import Logger
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs, urlunparse
 
 logger = Logger()
-config_loader = ConfigLoader()
 XGCARTOON_URL_KEYS = ("xgcartoon", "lincartoon", "dailygh")
 XGCARTOON_DOMAINS = (
     "www.xgcartoon.com",
@@ -97,11 +94,14 @@ class XgCartoonScrapper(Scrapper):
             return episode
 
         resolved = self.parse_episode(episode.referer_url)
-        return (
+        episode = (
             episode.set_episode_name(episode.episode_name or resolved.episode_name)
             .set_video_url(resolved.video_url)
             .set_referer_url(resolved.referer_url or episode.referer_url)
         )
+        if resolved.vtt_url:
+            episode.set_vtt_url(resolved.vtt_url)
+        return episode
 
     def parse_episode(self, url: str) -> Episode:
         try:
@@ -110,28 +110,22 @@ class XgCartoonScrapper(Scrapper):
             doc = BeautifulSoup(response.text, "html.parser")
             episode_name = doc.select_one("h1.h1").text.strip()
             iframe_src = doc.select_one("iframe").attrs["src"].strip()
+            vtt_url = None
             if "vid" in parse_qs(urlparse(iframe_src).query):
                 vid = parse_qs(urlparse(iframe_src).query)["vid"][0]
                 video_url = f"https://xgct-video.vzcdn.net/{vid}/playlist.m3u8"
                 vtt_url = f"https://xgct-video.vzcdn.net/{vid}/captions/TW.vtt"
-                response = http_client.get(vtt_url)
-                if response.status_code == 200:
-                    path = os.path.join(
-                        config_loader.get(section="DIRECTORY", key="output"),
-                        "vtt",
-                        episode_name + ".vtt",
-                    )
-                    os.makedirs(os.path.dirname(path), exist_ok=True)
-                    with open(path, "wb") as f:
-                        f.write(response.content)
             else:
                 video_url = self.parse_iframe(iframe_src)
-            return (
+            episode = (
                 Episode()
                 .set_episode_name(episode_name)
                 .set_video_url(video_url)
                 .set_referer_url(url)
             )
+            if vtt_url:
+                episode.set_vtt_url(vtt_url)
+            return episode
         except Exception as e:
             logger.error(f"{url}: {e}")
             return Episode()

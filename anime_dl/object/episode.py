@@ -8,6 +8,7 @@ class Episode:
         self.episode_name = None
         self.episode_no = None
         self.video_url = None
+        self.vtt_url = None
         self.referer_url = None
         self.image_src = None
 
@@ -29,6 +30,10 @@ class Episode:
 
     def set_video_url(self, video_url: str) -> "Episode":
         self.video_url = video_url
+        return self
+
+    def set_vtt_url(self, vtt_url: str) -> "Episode":
+        self.vtt_url = vtt_url
         return self
 
     def set_referer_url(self, referer_url: str) -> "Episode":

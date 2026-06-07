@@ -40,22 +40,20 @@ class FfmpegStrategy(Strategy):
                 f"{episode.series_name}.{episode.season}.{episode.episode_name}.mp4"
             )
             fnt = f"{episode.series_name}.{episode.season}.{episode.episode_name}_temp.mp4"
+            output_dir = config_loader.get(section="DIRECTORY", key="output")
             output = os.path.join(
-                config_loader.get(section="DIRECTORY", key="output"),
+                output_dir,
                 sanitize_filename(filename),
             )
             output_t = os.path.join(
-                config_loader.get(section="DIRECTORY", key="output"),
+                output_dir,
                 sanitize_filename(fnt),
             )
-            vtt = os.path.join(
-                config_loader.get(section="DIRECTORY", key="output"),
-                "vtt",
-                f"{episode.episode_name}.vtt",
-            )
+            vtt = self._vtt_path(output_dir, episode)
             os.makedirs(os.path.dirname(output), exist_ok=True)
             logger.info(f"started download: {filename} ({url})")
             self._download_video(url, output_t, episode.referer_url, filename)
+            self._prepare_vtt(episode, vtt)
             self._finish_download(output_t, output, vtt)
             logger.info(f"downloaded: {filename}")
         except Exception:
@@ -284,6 +282,36 @@ class FfmpegStrategy(Strategy):
         else:
             self._remove_file(output)
             os.rename(temp_output, output)
+
+    def _vtt_path(self, output_dir: str, episode: Episode) -> str:
+        filename = f"{episode.series_name}.{episode.season}.{episode.episode_name}.vtt"
+        return os.path.join(output_dir, "vtt", sanitize_filename(filename))
+
+    def _prepare_vtt(self, episode: Episode, path: str) -> None:
+        if os.path.exists(path):
+            return
+
+        vtt_url = getattr(episode, "vtt_url", None)
+        if not vtt_url:
+            return
+
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            response = requests.get(
+                vtt_url,
+                headers=self._request_headers(episode.referer_url),
+                timeout=M3U8_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            with open(path, "wb") as file:
+                file.write(response.content)
+
+            if os.path.getsize(path) == 0:
+                raise ValueError("empty vtt subtitle")
+            logger.info(f"vtt downloaded: {episode.episode_name}")
+        except Exception as e:
+            self._remove_file(path)
+            logger.warning(f"vtt download failed: {episode.episode_name}: {e}")
 
     def _ffmpeg_input_options(self, referer: str) -> dict:
         options = {
